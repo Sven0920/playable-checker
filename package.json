@@ -1,0 +1,12 @@
+{
+  "name": "playable-checker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:acceptance": "node ./scripts/run-acceptance.mjs"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  }
+}

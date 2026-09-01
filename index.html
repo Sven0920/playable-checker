@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Playable 试玩广告自查工具</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="wrap">
+    <h1 class="title">Playable 试玩广告自查工具</h1>
+    <p class="lead">
+      先选文件和渠道，再做静态检查；需要时在页面内跑一次半自动运行时验证（iframe + 人工操作）。
+    </p>
+
+    <section class="card">
+      <div class="step">第一步 · 选择文件</div>
+      <label id="dropzone" class="dropzone">
+        <input id="fileInput" type="file" accept=".html,.htm,.zip" hidden>
+        <div class="drop-ico">📂</div>
+        <div class="drop-title">点击选择，或拖拽 .html / .zip 到这里</div>
+        <div class="drop-sub">文件不会上传到服务器，全部在浏览器本地检查</div>
+      </label>
+      <div id="fileMeta" class="file-meta" aria-live="polite"></div>
+
+      <div class="step">第二步 · 选择渠道</div>
+      <div class="inline-controls">
+        <select id="channelSelect">
+          <option value="applovin">AppLovin</option>
+          <option value="unity">Unity（团结引擎导出）</option>
+          <option value="mintegral">Mintegral</option>
+          <option value="google">Google Ads</option>
+          <option value="meta">Meta（Facebook）</option>
+          <option value="moloco">Moloco</option>
+          <option value="tiktok">TikTok</option>
+        </select>
+        <button id="analyzeBtn" class="btn primary" disabled>开始检查</button>
+      </div>
+      <div id="guessHint" class="hint"></div>
+    </section>
+
+    <section class="card">
+      <div class="step">检查结果</div>
+      <div id="summary" class="summary empty">等待检查</div>
+      <div id="results" class="results empty">还没有检查结果</div>
+    </section>
+
+    <section class="card runtime-card">
+      <div class="step">运行时半自动验证（可选，但强烈建议）</div>
+      <p class="hint runtime-intro">
+        点击“加载到沙盒”后，在 iframe 内手动游玩/点击 CTA；工具会被动记录 console、外部请求、rAF 心跳和转屏信号。
+      </p>
+      <div class="runtime-controls">
+        <button id="mountBtn" class="btn" disabled>加载到沙盒</button>
+        <button id="portraitBtn" class="btn" disabled>竖屏 390×844</button>
+        <button id="landscapeBtn" class="btn" disabled>横屏 844×390</button>
+        <button id="narrowBtn" class="btn" disabled>窄框 216×384</button>
+        <button id="clearRuntimeBtn" class="btn" disabled>清空运行时日志</button>
+      </div>
+      <div id="runtimeStats" class="runtime-stats">
+        <span>console error: 0</span>
+        <span>console warn: 0</span>
+        <span>外部请求: 0</span>
+        <span>rAF/s: -</span>
+      </div>
+      <div id="frameShell" class="frame-shell">
+        <iframe
+          id="runtimeFrame"
+          title="Playable Sandbox"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-modals"
+        ></iframe>
+      </div>
+      <div id="runtimeLog" class="runtime-log empty">加载沙盒后会显示运行时信号</div>
+    </section>
+
+    <p class="footnote">
+      规则来源：团队 `playable-specs` 文档（仅覆盖 AppLovin / Unity / Mintegral / Google / Meta / Moloco / TikTok）。
+    </p>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

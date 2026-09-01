@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body>
+  <button id="cta">Play</button>
+  <script>
+    function track(name){
+      if(typeof window.ALPlayableAnalytics !== "undefined"){
+        window.ALPlayableAnalytics.trackEvent(name);
+      }
+    }
+    track("LOADING");
+    track("LOADED");
+    track("DISPLAYED");
+    document.getElementById("cta").addEventListener("click", function(){
+      track("CTA_CLICKED");
+      if(window.mraid){ mraid.open("https://play.google.com/store/apps/details?id=com.example"); }
+    });
+  </script>
+</body>
+</html>
