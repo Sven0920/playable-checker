@@ -7,6 +7,7 @@
 - 前端静态文件：`index.html` + `styles.css` + `app.js` + `checker-core.js`
 - 无后端、无文件上传，检查都在浏览器本地进行
 - 适合直接部署到 GitHub Pages
+- 已附带 `.github/workflows/deploy-pages.yml`，推到 `main` 后可走 GitHub Actions 自动发布 Pages
 
 ## 支持渠道（仅这 7 个）
 

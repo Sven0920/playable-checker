@@ -86,9 +86,9 @@ process.exit(allRequiredPass ? 0 : 1);
 
 async function buildBadMintegralZip(sourceHtmlPath, outZipPath) {
   const zip = new JSZip();
-  zip.file("index.html", await readFile(sourceHtmlPath, "utf8"));
+  zip.file("index.html", await readFile(sourceHtmlPath, "utf8"), { date: new Date("2000-01-01T00:00:00Z") });
   const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } });
-  await writeFile(outZipPath, buf);
+  await writeIfChanged(outZipPath, buf);
 }
 
 async function buildGoodGoogleZip(outZipPath) {
@@ -106,9 +106,9 @@ async function buildGoodGoogleZip(outZipPath) {
 </body>
 </html>`;
   const zip = new JSZip();
-  zip.file("index.html", html);
+  zip.file("index.html", html, { date: new Date("2000-01-01T00:00:00Z") });
   const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } });
-  await writeFile(outZipPath, buf);
+  await writeIfChanged(outZipPath, buf);
 }
 
 async function buildGoodApplovinSample(outPath) {
@@ -133,7 +133,7 @@ async function buildGoodApplovinSample(outPath) {
   </script>
 </body>
 </html>`;
-  await writeFile(outPath, html, "utf8");
+  await writeIfChanged(outPath, html, "utf8");
 }
 
 async function parsePlayable(path) {
@@ -235,4 +235,18 @@ ${rows}
 
 ${notes.join("\n")}
 `;
+}
+
+async function writeIfChanged(path, content, encoding = null) {
+  try {
+    const current = await readFile(path, encoding ? { encoding } : undefined);
+    if (encoding) {
+      if (current === content) return;
+    } else if (Buffer.compare(current, content) === 0) {
+      return;
+    }
+  } catch {
+    // file missing; proceed write
+  }
+  await writeFile(path, content, encoding ? { encoding } : undefined);
 }
