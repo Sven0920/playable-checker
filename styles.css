@@ -10,6 +10,8 @@
   --ok-ink: #1d8a44;
   --warn-bg: #fff7e6;
   --warn-ink: #b66a00;
+  --manual-bg: #eef3ff;
+  --manual-ink: #3759b8;
   --fail-bg: #fdeceb;
   --fail-ink: #d70015;
 }
@@ -198,6 +200,12 @@ select {
   border-color: #f2d8a2;
 }
 
+.badge.manual {
+  background: var(--manual-bg);
+  color: var(--manual-ink);
+  border-color: #cfd9ff;
+}
+
 .badge.fail {
   background: var(--fail-bg);
   color: var(--fail-ink);
@@ -224,6 +232,11 @@ select {
 .check.warn {
   background: #fffcf6;
   border-color: #f3dfb4;
+}
+
+.check.manual {
+  background: #f7f9ff;
+  border-color: #d6deff;
 }
 
 .check.fail {
@@ -258,6 +271,11 @@ select {
 .check-status.warn {
   background: var(--warn-bg);
   color: var(--warn-ink);
+}
+
+.check-status.manual {
+  background: var(--manual-bg);
+  color: var(--manual-ink);
 }
 
 .check-status.fail {

@@ -1,4 +1,5 @@
 const MB = 1024 * 1024;
+const APPLOVIN_PREVIEW_URL = "https://p.applov.in/playablePreview?create=1&qr=1";
 
 export const CHANNEL_OPTIONS = [
   { id: "applovin", label: "AppLovin" },
@@ -32,12 +33,25 @@ export function guessChannel(pkg) {
   const textBlob = pkg.allText || "";
   const names = pkg.entries.map((e) => e.path.toLowerCase());
   const rootHas = (name) => names.includes(name.toLowerCase());
+  const tuanjie = detectTuanjieExport(html);
 
   if (pkg.isZip && rootHas("config.json")) {
     return { id: "tiktok", reason: "ZIP 根目录发现 config.json（TikTok 特征）", confidence: "high" };
   }
-  if (/JS_GetCurrentChannelNameInternal\s*=\s*function\s*\(\)\s*\{\s*return\s*"unity"/i.test(html)) {
-    return { id: "unity", reason: "检测到团结引擎 Unity 渠道标记", confidence: "high" };
+  if (tuanjie.isTuanjie) {
+    const mapped = mapTuanjieChannelToChecker(tuanjie.channelName);
+    if (mapped) {
+      return {
+        id: mapped,
+        reason: `检测到团结引擎导出特征（标题 + mraid.js + JS_GetCurrentChannelNameInternal=${tuanjie.channelName}）`,
+        confidence: "high",
+      };
+    }
+    return {
+      id: "unity",
+      reason: "检测到团结引擎导出特征（标题 + mraid.js + JS_GetCurrentChannelNameInternal）。",
+      confidence: "medium",
+    };
   }
   if (/window\.(?:gameReady|gameStart|gameClose|gameEnd|install)\b/.test(textBlob)) {
     return { id: "mintegral", reason: "检测到 Mintegral 生命周期函数", confidence: "medium" };
@@ -70,18 +84,19 @@ export function analyzePlayable(pkg, channel) {
   const entryNames = pkg.entries.map((entry) => entry.path);
   const lowerText = allText.toLowerCase();
   const urls = extractUrls(allText);
+  const tuanjie = detectTuanjieExport(html);
 
   addGeneralChecks(checks, pkg, channel, html, allText, urls);
 
   switch (channel) {
     case "applovin":
-      addAppLovinChecks(checks, pkg, html, allText);
+      addAppLovinChecks(checks, pkg, html, allText, tuanjie);
       break;
     case "unity":
       addUnityChecks(checks, pkg, html, allText);
       break;
     case "mintegral":
-      addMintegralChecks(checks, pkg, html, allText, entryNames);
+      addMintegralChecks(checks, pkg, html, allText, entryNames, tuanjie);
       break;
     case "google":
       addGoogleChecks(checks, pkg, html, allText, entryNames);
@@ -136,7 +151,7 @@ function addGeneralChecks(checks, pkg, channel, html, allText, urls) {
   ));
 }
 
-function addAppLovinChecks(checks, pkg, html, allText) {
+function addAppLovinChecks(checks, pkg, html, allText, tuanjie) {
   checks.push(checkFormat(pkg, false, "AppLovin 只收单 HTML（不要上传 ZIP）"));
   checks.push(checkSize(pkg.sizeBytes <= 5 * MB, pkg.sizeBytes, "<= 5 MB（AppLovin）"));
 
@@ -151,17 +166,31 @@ function addAppLovinChecks(checks, pkg, html, allText) {
 
   const hasAlObj = /ALPlayableAnalytics/.test(allText);
   const trackCalls = (allText.match(/ALPlayableAnalytics\s*\.\s*trackEvent\s*\(/g) || []).length;
-  const status = !hasAlObj || trackCalls === 0 ? "fail" : "pass";
+  let status = "pass";
+  let what = `检测到 ALPlayableAnalytics.trackEvent 调用 ${trackCalls} 次。`;
+  let importance = "AppLovin 素材至少要有可触发的埋点调用，尤其 DISPLAYED。";
+  let fix = "在素材中添加可执行的 ALPlayableAnalytics.trackEvent(...) 调用，并在运行时面板确认有真实触发。";
+
+  if (!hasAlObj || trackCalls === 0) {
+    if (tuanjie.isTuanjie) {
+      status = "manual";
+      what = "检测到团结引擎导出，但静态文本里找不到 ALPlayableAnalytics 调用；这在 WASM / postMessage 路径下可能是假阴性。";
+      importance = "团结引擎导出的埋点调用可能编译进 WASM，静态搜代码或本地裸测都不能据此判定“没接埋点”。";
+      fix = `请用 AppLovin 官方工具手动验证：1) 打开 ${APPLOVIN_PREVIEW_URL}；2) 上传素材并运行；3) 右键 Inspect -> Console 过滤 ALPlayableEvent；4) 手动玩到 CTA，确认出现 Sent ALPlayableEvent: DISPLAYED 等事件。`;
+    } else {
+      status = "fail";
+      what = !hasAlObj
+        ? "未检测到 ALPlayableAnalytics。"
+        : "检测到 ALPlayableAnalytics 字符串，但未发现 trackEvent 实际调用。";
+    }
+  }
+
   checks.push(makeCheck(
     status,
     "ALPlayableAnalytics 埋点调用",
-    !hasAlObj
-      ? "未检测到 ALPlayableAnalytics。"
-      : trackCalls === 0
-        ? "检测到 ALPlayableAnalytics 字符串，但未发现 trackEvent 实际调用。"
-        : `检测到 ALPlayableAnalytics.trackEvent 调用 ${trackCalls} 次。`,
-    "AppLovin 素材至少要有可触发的埋点调用，尤其 DISPLAYED。",
-    "在素材中添加可执行的 ALPlayableAnalytics.trackEvent(...) 调用，并在运行时面板确认有真实触发。"
+    what,
+    importance,
+    fix
   ));
 
   const hasDisplayed = /DISPLAYED/.test(allText);
@@ -230,7 +259,7 @@ function addUnityChecks(checks, pkg, html, allText) {
   ));
 }
 
-function addMintegralChecks(checks, pkg, html, allText, entryNames) {
+function addMintegralChecks(checks, pkg, html, allText, entryNames, tuanjie) {
   checks.push(checkSize(pkg.sizeBytes <= 5 * MB, pkg.sizeBytes, "<= 5 MB（Mintegral）"));
 
   if (pkg.isZip) {
@@ -276,6 +305,17 @@ function addMintegralChecks(checks, pkg, html, allText, entryNames) {
   const mustCall = ["gameReady", "gameEnd", "install"];
   const missExpose = mustExpose.filter((n) => !new RegExp(`(?:window\\.${n}|function\\s+${n}\\s*\\()`).test(allText));
   const missCall = mustCall.filter((n) => !new RegExp(`window\\.${n}\\s*\\(`).test(allText));
+
+  if (tuanjie.isTuanjie) {
+    checks.push(makeCheck(
+      "pass",
+      "Mintegral 静态检测盲区评估（团结引擎）",
+      "检测到团结引擎导出；当前文件中已能静态看到 gameStart/gameClose/gameReady/gameEnd/install 桥接函数。",
+      "这几项是 Mintegral 的 JS 生命周期桥接入口，是否暴露/调用本身就在外层 JS，可被静态检查覆盖，不属于 AppLovin 埋点那类 WASM 假阴性。",
+      "继续按现有静态规则判定；若缺失任一项仍应按失败处理。"
+    ));
+  }
+
   checks.push(makeCheck(
     missExpose.length || missCall.length ? "fail" : "pass",
     "Mintegral 生命周期函数",
@@ -600,11 +640,51 @@ function makeCheck(status, title, what, importance, fix) {
 }
 
 function summarize(checks) {
-  const summary = { pass: 0, warn: 0, fail: 0 };
-  for (const check of checks) summary[check.status] += 1;
+  const summary = { pass: 0, warn: 0, fail: 0, manual: 0 };
+  for (const check of checks) {
+    if (!(check.status in summary)) summary[check.status] = 0;
+    summary[check.status] += 1;
+  }
   return summary;
 }
 
 function unique(list) {
   return [...new Set(list)];
+}
+
+export function detectTuanjieExport(html) {
+  const headMatch = html.match(/<head[\s\S]*?<\/head>/i);
+  const head = headMatch ? headMatch[0] : html;
+  const hasTuanjieTitle = /<title[^>]*>\s*Tuanjie\s+PlayableAds\s+Player\b/i.test(html);
+  const hasHeadMraidScript = /<script[^>]+src=["']mraid\.js["'][^>]*>/i.test(head);
+  const channelBridgeMatch = html.match(
+    /globalThis\.JS_GetCurrentChannelNameInternal\s*=\s*function\s*\(\)\s*\{\s*return\s*"([^"]+)"\s*\}/i
+  );
+  const hasChannelBridge = Boolean(channelBridgeMatch);
+  const channelName = channelBridgeMatch?.[1]?.toLowerCase() || null;
+  const hasUnityChannelLiteral = channelName === "unity";
+
+  return {
+    isTuanjie: hasTuanjieTitle && hasHeadMraidScript && hasChannelBridge,
+    hasTuanjieTitle,
+    hasHeadMraidScript,
+    hasChannelBridge,
+    hasUnityChannelLiteral,
+    channelName,
+  };
+}
+
+function mapTuanjieChannelToChecker(channelName) {
+  const mapping = {
+    applovin: "applovin",
+    unity: "unity",
+    mintegral: "mintegral",
+    google: "google",
+    facebook: "meta",
+    meta: "meta",
+    moloco: "moloco",
+    tiktok: "tiktok",
+    pangle: "tiktok",
+  };
+  return mapping[channelName] || null;
 }

@@ -154,6 +154,7 @@ function renderSummary(summary) {
   els.summary.innerHTML = [
     `<span class="badge fail">失败 ${summary.fail}</span>`,
     `<span class="badge warn">警告 ${summary.warn}</span>`,
+    `<span class="badge manual">待人工验证 ${summary.manual || 0}</span>`,
     `<span class="badge ok">通过 ${summary.pass}</span>`,
   ].join("");
 }
@@ -166,7 +167,7 @@ function renderChecks(checks) {
   }
   els.results.className = "results";
   els.results.innerHTML = checks.map((check) => {
-    const statusText = check.status === "pass" ? "通过" : check.status === "warn" ? "警告" : "失败";
+    const statusText = statusLabel(check.status);
     return `
       <article class="check ${check.status}">
         <div class="check-head">
@@ -331,6 +332,13 @@ function renderRuntimeStats() {
     <span>console warn: ${state.runtime.warn}</span>
     <span>外部请求: ${state.runtime.net}</span>
     <span>rAF/s: ${rafText}</span>`;
+}
+
+function statusLabel(status) {
+  if (status === "pass") return "通过";
+  if (status === "warn") return "警告";
+  if (status === "manual") return "待人工验证";
+  return "失败";
 }
 
 function addRuntimeRow(kind, text) {

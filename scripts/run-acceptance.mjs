@@ -9,6 +9,7 @@ const FIXTURE_DIR = `${ROOT}fixtures/generated`;
 const REAL_APPLOVIN_MISSING_AL = "/Users/sven/Desktop/Creatives/Cube Tap Away/Playable/Applovin/CTAP021_APL_260901.html";
 const REAL_MINTEGRAL_HTML = "/Users/sven/Desktop/Creatives/Yarn Sort/Playable/Mintegral/HTML/YSP020_MTG_260805.html";
 const REAL_APPLOVIN_GOOD = "/Users/sven/Desktop/Creatives/Jigsaw Fall/Playable/Applovin/JFP001_APL_260724.html";
+const REAL_TUANJIE_APPLOVIN_AMBIGUOUS = "/Users/sven/Desktop/Creatives/Jigsaw Fall/Playable/Applovin/JFP011_APL_260901.html";
 
 await mkdir(FIXTURE_DIR, { recursive: true });
 
@@ -54,6 +55,13 @@ const cases = [
     expect: (result) => result.summary.fail === 0,
   },
   {
+    id: "C5",
+    title: "团结引擎 AppLovin：静态无埋点特征时应给出“待人工验证”",
+    channel: "applovin",
+    path: REAL_TUANJIE_APPLOVIN_AMBIGUOUS,
+    expect: (result) => findCheck(result, "ALPlayableAnalytics 埋点调用")?.status === "manual",
+  },
+  {
     id: "R1",
     title: "补充：真实 AppLovin 正向样例",
     channel: "applovin",
@@ -75,7 +83,7 @@ const allRequiredPass = outputs.filter((x) => x.id !== "R1").every((x) => x.pass
 console.log(`\nPlayable Checker Acceptance (${new Date().toISOString()})`);
 for (const out of outputs) {
   console.log(`${out.pass ? "✅" : "❌"} ${out.id} ${out.title}`);
-  console.log(`   channel=${out.channel} fail=${out.result.summary.fail} warn=${out.result.summary.warn} pass=${out.result.summary.pass}`);
+  console.log(`   channel=${out.channel} fail=${out.result.summary.fail} warn=${out.result.summary.warn} manual=${out.result.summary.manual || 0} pass=${out.result.summary.pass}`);
 }
 console.log(allRequiredPass ? "\nAll required cases passed.\n" : "\nSome required cases failed.\n");
 
@@ -203,7 +211,7 @@ function normalizePath(path) {
 
 function renderTestingMarkdown(outputs, allRequiredPass) {
   const rows = outputs.map((out) => {
-    const summary = `fail ${out.result.summary.fail} / warn ${out.result.summary.warn} / pass ${out.result.summary.pass}`;
+    const summary = `fail ${out.result.summary.fail} / warn ${out.result.summary.warn} / manual ${out.result.summary.manual || 0} / pass ${out.result.summary.pass}`;
     return `| ${out.id} | ${out.title} | ${out.channel} | \`${out.path}\` | ${out.pass ? "✅" : "❌"} | ${summary} |`;
   }).join("\n");
 
@@ -211,6 +219,7 @@ function renderTestingMarkdown(outputs, allRequiredPass) {
     "- C1 与 C2 使用本机真实素材来源（来自 `Creatives` 目录）。",
     "- C3 为按规则构造的 Google 正向 ZIP（当前创意目录里未保留可直接复用的 Google ZIP 样本）。",
     "- C4 为构造的 AppLovin 合规模板，用于验证工具不会“只会报错”。",
+    "- C5 使用真实团结引擎样例 `JFP011_APL_260901.html`，验证 WASM 场景下的“待人工验证”分支。",
     "- R1 是额外的真实正向样例（Jigsaw Fall AppLovin），用于补充对真实文件的通过路径观察。",
   ];
 
@@ -218,7 +227,7 @@ function renderTestingMarkdown(outputs, allRequiredPass) {
 
 执行时间：${new Date().toISOString()}
 
-总体结果：${allRequiredPass ? "✅ 通过（必测 4 项全部符合预期）" : "❌ 未通过（至少 1 项不符合预期）"}
+总体结果：${allRequiredPass ? "✅ 通过（必测 5 项全部符合预期）" : "❌ 未通过（至少 1 项不符合预期）"}
 
 | Case | 用例 | 渠道 | 文件 | 结果 | 汇总 |
 | --- | --- | --- | --- | --- | --- |
@@ -230,6 +239,7 @@ ${rows}
 - C2：必须命中“Mintegral ZIP 结构”警告或失败。
 - C3：必须通过 ad.orientation + ExitApi 接入检查，且整体无失败。
 - C4：至少一个完全合规样例可全绿（无失败）。
+- C5：团结引擎导出的 AppLovin 样例在静态未命中埋点时，必须显示“待人工验证”，不能判失败。
 
 ## 说明
 
