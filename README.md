@@ -39,12 +39,14 @@
 - 禁止项（如 `mraid.js`、`XMLHttpRequest`、不合规格式）
 - Mintegral 生命周期函数暴露与调用痕迹
 - AppLovin `ALPlayableAnalytics` 引用和调用痕迹
+- Base122 + Brotli 单文件：先解压 `@b122:` 指向的内嵌脚本，再扫 `DISPLAYED` / `mraid.open` / `trackEvent`
 - 通用“外部 URL 风险”与“资源回落陷阱（__ASSET_URL）”提示
 
 ## 已知局限（如实说明）
 
 - 运行时检测是**半自动**：工具只负责注入监控并记录信号，仍需人工在 iframe 里实际操作触发路径。
 - 对团结引擎导出的 AppLovin 素材，`ALPlayableAnalytics` 静态扫描可能出现假阴性；工具会给出“待人工验证”，并引导到官方 Playable Preview 里看 `ALPlayableEvent` 回显。
+- Base122 + Brotli 只解压被 `@b122:` 引用、并且解出来像脚本的那段。资源包本体不解压；解压失败时埋点项改为“待人工验证”，避免把看不懂的压缩包判成没接埋点。
 - 这不是 headless Chrome 全自动审核替代品；特别是 Unity 转屏黑屏/冻结，建议继续配合团队现有 Node 脚本复测。
 - 对 ZIP 多文件运行时加载做了常见路径重写，但无法保证 100% 还原所有复杂资源解析逻辑。
 - 静态扫描基于字符串/结构规则，不做完整语义分析，个别项目可能需要人工二次判断。

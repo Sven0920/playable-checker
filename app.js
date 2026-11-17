@@ -141,12 +141,20 @@ async function parseUploadedFile(file) {
   };
 }
 
-function runAnalysis() {
+async function runAnalysis() {
   if (!state.pkg) return;
-  const report = analyzePlayable(state.pkg, els.channelSelect.value);
-  renderSummary(report.summary);
-  renderChecks(report.checks);
-  enableRuntimeControls();
+  els.analyzeBtn.disabled = true;
+  try {
+    const report = await analyzePlayable(state.pkg, els.channelSelect.value);
+    renderSummary(report.summary);
+    renderChecks(report.checks);
+    enableRuntimeControls();
+  } catch (error) {
+    els.results.className = "results";
+    els.results.textContent = `检查失败：${error.message}`;
+  } finally {
+    els.analyzeBtn.disabled = false;
+  }
 }
 
 function renderSummary(summary) {
