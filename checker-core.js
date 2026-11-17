@@ -1,5 +1,8 @@
+import { unpackPlayableScripts } from "./packed-text.js";
+
 const MB = 1024 * 1024;
 const APPLOVIN_PREVIEW_URL = "https://p.applov.in/playablePreview?create=1&qr=1";
+const unpackCache = new WeakMap();
 
 export const CHANNEL_OPTIONS = [
   { id: "applovin", label: "AppLovin" },
@@ -77,10 +80,14 @@ export function guessChannel(pkg) {
   return { id: null, reason: "没有足够特征，建议手动选择渠道", confidence: "low" };
 }
 
-export function analyzePlayable(pkg, channel) {
+export async function analyzePlayable(pkg, channel) {
   const checks = [];
+  const packed = await cachedUnpack(pkg);
   const html = pkg.mainHtmlText || "";
-  const allText = pkg.allText || "";
+  const rawText = pkg.allText || "";
+  const allText = packed.text
+    ? `${rawText}\n/* --- unpacked base122 script --- */\n${packed.text}`
+    : rawText;
   const entryNames = pkg.entries.map((entry) => entry.path);
   const lowerText = allText.toLowerCase();
   const urls = extractUrls(allText);
@@ -90,7 +97,7 @@ export function analyzePlayable(pkg, channel) {
 
   switch (channel) {
     case "applovin":
-      addAppLovinChecks(checks, pkg, html, allText, tuanjie);
+      addAppLovinChecks(checks, pkg, html, allText, tuanjie, { ...packed, rawText });
       break;
     case "unity":
       addUnityChecks(checks, pkg, html, allText);
@@ -115,7 +122,13 @@ export function analyzePlayable(pkg, channel) {
   }
 
   const summary = summarize(checks);
-  return { checks, summary };
+  return { checks, summary, packed: { decoded: packed.decoded, failed: packed.failed } };
+}
+
+function cachedUnpack(pkg) {
+  if (!pkg || typeof pkg !== "object") return Promise.resolve({ text: "", decoded: 0, failed: 0 });
+  if (!unpackCache.has(pkg)) unpackCache.set(pkg, unpackPlayableScripts(pkg));
+  return unpackCache.get(pkg);
 }
 
 function addGeneralChecks(checks, pkg, channel, html, allText, urls) {
@@ -151,23 +164,36 @@ function addGeneralChecks(checks, pkg, channel, html, allText, urls) {
   ));
 }
 
-function addAppLovinChecks(checks, pkg, html, allText, tuanjie) {
+function addAppLovinChecks(checks, pkg, html, allText, tuanjie, packed = {}) {
+  const rawText = packed.rawText ?? allText;
+  const packedText = packed.text || "";
+  const foundOnlyInPacked = (pattern) => Boolean(packedText) && pattern.test(packedText) && !pattern.test(rawText);
+  const packedDecodeMissed = (packed.failed || 0) > 0 && (packed.decoded || 0) === 0;
+
   checks.push(checkFormat(pkg, false, "AppLovin 只收单 HTML（不要上传 ZIP）"));
   checks.push(checkSize(pkg.sizeBytes <= 5 * MB, pkg.sizeBytes, "<= 5 MB（AppLovin）"));
 
-  const hasMraidOpen = /mraid\.open\s*\(/.test(allText);
+  const mraidPattern = /mraid\.open\s*\(/;
+  const hasMraidOpen = mraidPattern.test(allText);
   checks.push(makeCheck(
     hasMraidOpen ? "pass" : "fail",
     "click-through API（mraid.open）",
-    hasMraidOpen ? "检测到 mraid.open()。" : "未检测到 mraid.open()。",
+    hasMraidOpen
+      ? (foundOnlyInPacked(mraidPattern)
+        ? "明文里没有 mraid.open()，已在 Base122 + Brotli 解压后的脚本里检测到。"
+        : "检测到 mraid.open()。")
+      : "未检测到 mraid.open()。",
     "AppLovin 跳商店应使用 mraid.open，否则 CTA 可能失效。",
     "将统一跳转函数改为 mraid.open(url)。"
   ));
 
+  const trackPattern = /ALPlayableAnalytics\s*\??\.\s*trackEvent\s*\(/;
   const hasAlObj = /ALPlayableAnalytics/.test(allText);
-  const trackCalls = (allText.match(/ALPlayableAnalytics\s*\.\s*trackEvent\s*\(/g) || []).length;
+  const trackCalls = (allText.match(new RegExp(trackPattern.source, "g")) || []).length;
   let status = "pass";
-  let what = `检测到 ALPlayableAnalytics.trackEvent 调用 ${trackCalls} 次。`;
+  let what = foundOnlyInPacked(trackPattern)
+    ? `明文里没有埋点调用，已在 Base122 + Brotli 解压后的脚本里检测到 ALPlayableAnalytics.trackEvent ${trackCalls} 次。`
+    : `检测到 ALPlayableAnalytics.trackEvent 调用 ${trackCalls} 次。`;
   let importance = "AppLovin 素材至少要有可触发的埋点调用，尤其 DISPLAYED。";
   let fix = "在素材中添加可执行的 ALPlayableAnalytics.trackEvent(...) 调用，并在运行时面板确认有真实触发。";
 
@@ -177,6 +203,11 @@ function addAppLovinChecks(checks, pkg, html, allText, tuanjie) {
       what = "检测到团结引擎导出，但静态文本里找不到 ALPlayableAnalytics 调用；这在 WASM / postMessage 路径下可能是假阴性。";
       importance = "团结引擎导出的埋点调用可能编译进 WASM，静态搜代码或本地裸测都不能据此判定“没接埋点”。";
       fix = `请用 AppLovin 官方工具手动验证：1) 打开 ${APPLOVIN_PREVIEW_URL}；2) 上传素材并运行；3) 右键 Inspect -> Console 过滤 ALPlayableEvent；4) 手动玩到 CTA，确认出现 Sent ALPlayableEvent: DISPLAYED 等事件。`;
+    } else if (packedDecodeMissed) {
+      status = "manual";
+      what = "检测到 Base122 内嵌脚本，但 Brotli 解压失败，不能凭外层明文判断有没有埋点。";
+      importance = "这类单文件会把真正的玩法脚本压进 pre 标签，解压失败时静态结果是假阴性。";
+      fix = `请用 AppLovin 官方工具手动验证：1) 打开 ${APPLOVIN_PREVIEW_URL}；2) 上传素材并运行；3) 右键 Inspect -> Console 过滤 ALPlayableEvent；4) 确认出现 Sent ALPlayableEvent: DISPLAYED。`;
     } else {
       status = "fail";
       what = !hasAlObj
@@ -193,11 +224,18 @@ function addAppLovinChecks(checks, pkg, html, allText, tuanjie) {
     fix
   ));
 
-  const hasDisplayed = /DISPLAYED/.test(allText);
+  const displayedPattern = /DISPLAYED/;
+  const hasDisplayed = displayedPattern.test(allText);
   checks.push(makeCheck(
-    hasDisplayed ? "pass" : "warn",
+    hasDisplayed ? "pass" : (packedDecodeMissed ? "manual" : "warn"),
     "DISPLAYED 事件痕迹",
-    hasDisplayed ? "检测到 DISPLAYED 事件字样。" : "未检测到 DISPLAYED 事件字样。",
+    hasDisplayed
+      ? (foundOnlyInPacked(displayedPattern)
+        ? "明文里没有 DISPLAYED，已在 Base122 + Brotli 解压后的脚本里检测到。"
+        : "检测到 DISPLAYED 事件字样。")
+      : (packedDecodeMissed
+        ? "检测到 Base122 内嵌脚本，但解压失败，无法确认里面有没有 DISPLAYED。"
+        : "未检测到 DISPLAYED 事件字样。"),
     "DISPLAYED 是 AppLovin 文档里最关键的底线事件。",
     hasDisplayed ? "仍建议在运行时面板确认事件不是假日志。" : "至少补一个 DISPLAYED 事件调用。"
   ));

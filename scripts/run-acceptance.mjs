@@ -1,7 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, basename, extname } from "node:path";
+import { basename, extname } from "node:path";
+import { brotliCompressSync } from "node:zlib";
 import JSZip from "jszip";
 import { analyzePlayable, isTextEntry } from "../checker-core.js";
+import { decodeBase122 } from "../packed-text.js";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const FIXTURE_DIR = `${ROOT}fixtures/generated`;
@@ -10,16 +12,22 @@ const REAL_APPLOVIN_MISSING_AL = "/Users/sven/Desktop/Creatives/Cube Tap Away/Pl
 const REAL_MINTEGRAL_HTML = "/Users/sven/Desktop/Creatives/Yarn Sort/Playable/Mintegral/HTML/YSP020_MTG_260805.html";
 const REAL_APPLOVIN_GOOD = "/Users/sven/Desktop/Creatives/Jigsaw Fall/Playable/Applovin/JFP001_APL_260724.html";
 const REAL_TUANJIE_APPLOVIN_AMBIGUOUS = "/Users/sven/Desktop/Creatives/Jigsaw Fall/Playable/Applovin/JFP011_APL_260901.html";
+const BASE122_ILLEGALS = [0, 10, 13, 34, 38, 92, 60];
+const BASE122_SHORTENED = 0b111;
 
 await mkdir(FIXTURE_DIR, { recursive: true });
 
 const badMtgZip = `${FIXTURE_DIR}/YSP020_bad_structure.zip`;
 const goodGoogleZip = `${FIXTURE_DIR}/google_good_sample.zip`;
 const goodApplovinHtml = `${FIXTURE_DIR}/applovin_good_sample.html`;
+const packedApplovinHtml = `${FIXTURE_DIR}/applovin_base122_sample.html`;
+const packedApplovinMissingHtml = `${FIXTURE_DIR}/applovin_base122_missing_sample.html`;
 
-await buildBadMintegralZip(REAL_MINTEGRAL_HTML, badMtgZip);
+await buildIfExists(REAL_MINTEGRAL_HTML, () => buildBadMintegralZip(REAL_MINTEGRAL_HTML, badMtgZip));
 await buildGoodGoogleZip(goodGoogleZip);
 await buildGoodApplovinSample(goodApplovinHtml);
+await buildPackedApplovinSample(packedApplovinHtml, packedApplovinScript(true));
+await buildPackedApplovinSample(packedApplovinMissingHtml, packedApplovinScript(false));
 
 const cases = [
   {
@@ -62,6 +70,30 @@ const cases = [
     expect: (result) => findCheck(result, "ALPlayableAnalytics 埋点调用")?.status === "manual",
   },
   {
+    id: "C6",
+    title: "AppLovin Base122 + Brotli：解压后能看到 DISPLAYED",
+    channel: "applovin",
+    path: packedApplovinHtml,
+    expect: (result) => {
+      const analytics = findCheck(result, "ALPlayableAnalytics 埋点调用");
+      const displayed = findCheck(result, "DISPLAYED 事件痕迹");
+      const mraid = findCheck(result, "click-through API（mraid.open）");
+      return analytics?.status === "pass"
+        && displayed?.status === "pass"
+        && /解压后的脚本/.test(displayed?.what || "")
+        && mraid?.status === "pass"
+        && result.summary.fail === 0;
+    },
+  },
+  {
+    id: "C7",
+    title: "AppLovin Base122 + Brotli：解压后仍没有埋点应失败",
+    channel: "applovin",
+    path: packedApplovinMissingHtml,
+    expect: (result) => findCheck(result, "ALPlayableAnalytics 埋点调用")?.status === "fail"
+      && findCheck(result, "DISPLAYED 事件痕迹")?.status === "warn",
+  },
+  {
     id: "R1",
     title: "补充：真实 AppLovin 正向样例",
     channel: "applovin",
@@ -72,17 +104,32 @@ const cases = [
 
 const outputs = [];
 for (const item of cases) {
-  const pkg = await parsePlayable(item.path);
-  const result = analyzePlayable(pkg, item.channel);
+  let pkg;
+  try {
+    pkg = await parsePlayable(item.path);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      outputs.push({ ...item, pass: false, skipped: true, result: emptyResult() });
+      continue;
+    }
+    throw error;
+  }
+  const result = await analyzePlayable(pkg, item.channel);
   const pass = item.expect(result);
-  outputs.push({ ...item, pass, result });
+  outputs.push({ ...item, pass, skipped: false, result });
 }
 
-const allRequiredPass = outputs.filter((x) => x.id !== "R1").every((x) => x.pass);
+const required = outputs.filter((x) => x.id !== "R1" && !x.skipped);
+const allRequiredPass = required.length > 0 && required.every((x) => x.pass);
 
 console.log(`\nPlayable Checker Acceptance (${new Date().toISOString()})`);
 for (const out of outputs) {
-  console.log(`${out.pass ? "✅" : "❌"} ${out.id} ${out.title}`);
+  const mark = out.skipped ? "⏭️" : out.pass ? "✅" : "❌";
+  console.log(`${mark} ${out.id} ${out.title}`);
+  if (out.skipped) {
+    console.log("   skipped: local creative file is not on this machine");
+    continue;
+  }
   console.log(`   channel=${out.channel} fail=${out.result.summary.fail} warn=${out.result.summary.warn} manual=${out.result.summary.manual || 0} pass=${out.result.summary.pass}`);
 }
 console.log(allRequiredPass ? "\nAll required cases passed.\n" : "\nSome required cases failed.\n");
@@ -117,6 +164,101 @@ async function buildGoodGoogleZip(outZipPath) {
   zip.file("index.html", html, { date: new Date("2000-01-01T00:00:00Z") });
   const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 9 } });
   await writeIfChanged(outZipPath, buf);
+}
+
+async function buildIfExists(source, build) {
+  try {
+    await readFile(source);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  await build();
+}
+
+function emptyResult() {
+  return { summary: { fail: 0, warn: 0, manual: 0, pass: 0 }, checks: [] };
+}
+
+function packedApplovinScript(withAnalytics) {
+  if (!withAnalytics) {
+    return `function start(){ console.log("packed playable without analytics"); }
+start();`;
+  }
+  return `function track(name){
+  if(typeof window.ALPlayableAnalytics?.trackEvent==="function"){
+    window.ALPlayableAnalytics.trackEvent(name);
+  }
+}
+track("LOADING");
+track("LOADED");
+track("DISPLAYED");
+document.addEventListener("click",function(){mraid.open("https://play.google.com/store/apps/details?id=com.example.game");});`;
+}
+
+async function buildPackedApplovinSample(outPath, script) {
+  const compressed = brotliCompressSync(Buffer.from(script, "utf8"));
+  const payload = encodeBase122(compressed);
+  const roundtrip = decodeBase122(payload);
+  if (Buffer.compare(Buffer.from(roundtrip), compressed) !== 0) {
+    throw new Error(`Base122 roundtrip failed for ${outPath}`);
+  }
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>packed applovin</title></head>
+<body>
+<pre hidden id="b122-game-code" data-base122>${payload}</pre>
+<script>function F(name){return name.startsWith("@b122:b122-game-code");}F("@b122:b122-game-code");</script>
+</body>
+</html>`;
+  await writeIfChanged(outPath, html, "utf8");
+}
+
+function encodeBase122(rawData) {
+  let curIndex = 0;
+  let curBit = 0;
+  const outData = [];
+
+  function get7() {
+    if (curIndex >= rawData.length) return false;
+    const firstByte = rawData[curIndex];
+    let firstPart = ((0b11111110 >>> curBit) & firstByte) << curBit;
+    firstPart >>= 1;
+    curBit += 7;
+    if (curBit < 8) return firstPart;
+    curBit -= 8;
+    curIndex += 1;
+    if (curIndex >= rawData.length) return firstPart;
+    const secondByte = rawData[curIndex];
+    let secondPart = ((0xff00 >>> curBit) & secondByte) & 0xff;
+    secondPart >>= 8 - curBit;
+    return firstPart | secondPart;
+  }
+
+  while (true) {
+    const bits = get7();
+    if (bits === false) break;
+    const illegalIndex = BASE122_ILLEGALS.indexOf(bits);
+    if (illegalIndex !== -1) {
+      let nextBits = get7();
+      let firstByte = 0b11000010;
+      let secondByte = 0b10000000;
+      if (nextBits === false) {
+        firstByte |= (0b111 & BASE122_SHORTENED) << 2;
+        nextBits = bits;
+      } else {
+        firstByte |= (0b111 & illegalIndex) << 2;
+      }
+      const firstBit = (nextBits & 0b01000000) > 0 ? 1 : 0;
+      firstByte |= firstBit;
+      secondByte |= nextBits & 0b00111111;
+      outData.push(firstByte, secondByte);
+    } else {
+      outData.push(bits);
+    }
+  }
+
+  return new TextDecoder("utf-8").decode(Uint8Array.from(outData));
 }
 
 async function buildGoodApplovinSample(outPath) {
@@ -211,15 +353,27 @@ function normalizePath(path) {
 
 function renderTestingMarkdown(outputs, allRequiredPass) {
   const rows = outputs.map((out) => {
+    if (out.skipped) {
+      return `| ${out.id} | ${out.title} | ${out.channel} | \`${out.path}\` | ⏭️ 跳过 | 本机文件不存在 |`;
+    }
     const summary = `fail ${out.result.summary.fail} / warn ${out.result.summary.warn} / manual ${out.result.summary.manual || 0} / pass ${out.result.summary.pass}`;
     return `| ${out.id} | ${out.title} | ${out.channel} | \`${out.path}\` | ${out.pass ? "✅" : "❌"} | ${summary} |`;
   }).join("\n");
 
+  const skipped = outputs.filter((out) => out.skipped).length;
+  const headline = allRequiredPass
+    ? (skipped
+      ? `✅ 通过（已执行的必测项符合预期，${skipped} 项因本机素材不在这台机器上而跳过）`
+      : "✅ 通过（必测项全部符合预期）")
+    : "❌ 未通过（至少 1 项不符合预期）";
+
   const notes = [
-    "- C1 与 C2 使用本机真实素材来源（来自 `Creatives` 目录）。",
+    "- C1 与 C2 使用本机真实素材来源（来自 `Creatives` 目录）。文件不在当前机器上时记为跳过，不记失败。",
     "- C3 为按规则构造的 Google 正向 ZIP（当前创意目录里未保留可直接复用的 Google ZIP 样本）。",
     "- C4 为构造的 AppLovin 合规模板，用于验证工具不会“只会报错”。",
     "- C5 使用真实团结引擎样例 `JFP011_APL_260901.html`，验证 WASM 场景下的“待人工验证”分支。",
+    "- C6 为 Base122 + Brotli 打包的 AppLovin 样例，明文不含 DISPLAYED，解压后的脚本里有。",
+    "- C7 为同样打包、但解压后仍然没有埋点的样例，必须继续判失败，不能因为“是压缩包”就放过。",
     "- R1 是额外的真实正向样例（Jigsaw Fall AppLovin），用于补充对真实文件的通过路径观察。",
   ];
 
@@ -227,7 +381,7 @@ function renderTestingMarkdown(outputs, allRequiredPass) {
 
 执行时间：${new Date().toISOString()}
 
-总体结果：${allRequiredPass ? "✅ 通过（必测 5 项全部符合预期）" : "❌ 未通过（至少 1 项不符合预期）"}
+总体结果：${headline}
 
 | Case | 用例 | 渠道 | 文件 | 结果 | 汇总 |
 | --- | --- | --- | --- | --- | --- |
@@ -240,6 +394,8 @@ ${rows}
 - C3：必须通过 ad.orientation + ExitApi 接入检查，且整体无失败。
 - C4：至少一个完全合规样例可全绿（无失败）。
 - C5：团结引擎导出的 AppLovin 样例在静态未命中埋点时，必须显示“待人工验证”，不能判失败。
+- C6：Base122 + Brotli 素材必须在解压后命中 DISPLAYED、埋点调用和 mraid.open，且整体无失败。
+- C7：Base122 + Brotli 素材解压后如果仍然没有埋点，必须判失败。
 
 ## 说明
 
